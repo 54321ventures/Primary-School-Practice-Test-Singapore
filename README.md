@@ -41,12 +41,19 @@ Open it from the top bar (`#/parent`). It has:
 - Every attempt, with his answers next to the correct ones. You can **change any self-marked score** (they're flagged "adjusted") and leave a note.
 - Settings: an optional **parent PIN**, **Export / Import** of all data as JSON, and *Delete all data*.
 
-> All work is stored in the browser's `localStorage`, on that one device and in
-> that one browser. Use **Export** to keep a backup or to move the data to
-> another device.
+> Through the claude.ai link, work is saved to the claude.ai account. When
+> `index.html` is opened directly, work is stored in that browser's
+> `localStorage` only. Use **Export** to keep a backup or to move the data.
 
 ## Running it
 
+- **On an iPad or phone (easiest):** open the private claude.ai link
+  https://claude.ai/artifact/UcM2hEs17qwTa1wf6wvpZz in Safari (signed in to
+  claude.ai) or in the Claude app, then use Share → *Add to Home Screen*. Work
+  done there is saved to the claude.ai account, so the parent dashboard shows
+  the same results on any device that is signed in to that account. To update
+  the link after changing a paper, run `node tools/build-artifact.js` and
+  republish `dist/p3-practice.html` to the same URL.
 - **Locally:** double-click `index.html`. It works offline from `file://`. The
   Nunito font is the only online resource, and the page falls back to the system
   font without it.

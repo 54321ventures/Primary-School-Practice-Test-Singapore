@@ -29,18 +29,106 @@
   }
   function del(k) { delete mem[k]; try { localStorage.removeItem(k); } catch (e) { /* ignore */ } }
 
-  function store() {
-    var s = getJSON(STORE_KEY, null);
-    if (!s || !Array.isArray(s.attempts)) s = { attempts: [], settings: {} };
-    if (!s.settings) s.settings = {};
-    return s;
+  // Saved work is kept in memory and mirrored to localStorage. When the page runs inside the
+  // claude.ai viewer, it is also kept in the artifact's database so it follows the account.
+  var cache = getJSON(STORE_KEY, null);
+  if (!cache || !Array.isArray(cache.attempts)) cache = { attempts: [], settings: {} };
+  if (!cache.settings) cache.settings = {};
+  var cloud = null;
+
+  function store() { return cache; }
+  function persistLocal() { setJSON(STORE_KEY, cache); }
+  function getAttempt(id) { return cache.attempts.filter(function (a) { return a.id === id; })[0]; }
+  function cloudFail(e) {
+    toast('Could not save to your claude.ai account' + (e && e.code === 'quota_exceeded' ? ' (storage is full)' : '') +
+      '. Your work is still saved on this device.', 'warn', 6000);
   }
-  function saveStore(s) { setJSON(STORE_KEY, s); }
-  function getAttempt(id) { return store().attempts.filter(function (a) { return a.id === id; })[0]; }
+  function cloudPut(a) {
+    if (cloud) cloud.collection('attempts').doc(a.id).set({ submittedAt: a.submittedAt || '', json: JSON.stringify(a) }).catch(cloudFail);
+  }
   function saveAttempt(a) {
-    var s = store(), i = s.attempts.findIndex(function (x) { return x.id === a.id; });
-    if (i >= 0) s.attempts[i] = a; else s.attempts.push(a);
-    saveStore(s);
+    var i = cache.attempts.findIndex(function (x) { return x.id === a.id; });
+    if (i >= 0) cache.attempts[i] = a; else cache.attempts.push(a);
+    persistLocal();
+    cloudPut(a);
+  }
+  function saveSettings(settings) {
+    cache.settings = settings;
+    persistLocal();
+    if (cloud) cloud.doc('settings/main').set({ json: JSON.stringify(settings) }).catch(cloudFail);
+  }
+  function deleteAllAttempts() {
+    var ids = cache.attempts.map(function (a) { return a.id; });
+    cache.attempts = [];
+    persistLocal();
+    if (cloud) {
+      var db = cloud;
+      ids.reduce(function (p, id) { return p.then(function () { return db.collection('attempts').doc(id).delete(); }); }, Promise.resolve()).catch(cloudFail);
+    }
+  }
+
+  function connectCloud() {
+    if (!window.claude || typeof window.claude.use !== 'function') return;
+    window.claude.use('db').then(function (db) {
+      if (!db) return;
+      var firstAttempts = true, firstSettings = true;
+      db.collection('attempts').onSnapshot(function (snap) {
+        var remote = {};
+        snap.docs.forEach(function (d) {
+          try { var a = JSON.parse(d.data().json); if (a && a.id) remote[a.id] = a; } catch (e) { /* skip a damaged record */ }
+        });
+        if (firstAttempts) {
+          firstAttempts = false;
+          cloud = db;
+          // Upload anything saved on this device before the account store answered.
+          cache.attempts.forEach(function (a) { if (!remote[a.id]) { remote[a.id] = a; cloudPut(a); } });
+        }
+        cache.attempts = Object.keys(remote).map(function (k) { return remote[k]; });
+        persistLocal();
+        dataChanged();
+      }, function () { cloud = null; });
+      db.doc('settings/main').onSnapshot(function (d) {
+        if (d.exists) {
+          try { cache.settings = JSON.parse(d.data().json) || {}; } catch (e) { /* keep local settings */ }
+          persistLocal();
+          dataChanged();
+        } else if (firstSettings && cache.settings.pin) {
+          db.doc('settings/main').set({ json: JSON.stringify(cache.settings) }).catch(cloudFail);
+        }
+        firstSettings = false;
+      });
+    }).catch(function () { /* stay local */ });
+  }
+
+  // Refresh read-only views when saved work arrives from the account store.
+  var changeTimer;
+  function dataChanged() {
+    clearTimeout(changeTimer);
+    changeTimer = setTimeout(function () {
+      var view = currentPath.replace(/^\/?/, '').split('/')[0];
+      if (view === '' || view === 'parent') route(true);
+    }, 150);
+  }
+
+  // In-page confirmation (the claude.ai viewer does not show browser dialogs).
+  function ask(message, okLabel, danger) {
+    return new Promise(function (resolve) {
+      var wrap = document.createElement('div');
+      wrap.className = 'modal-backdrop';
+      wrap.innerHTML = '<div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalMsg"><p id="modalMsg"></p>' +
+        '<div class="btn-row"><button class="btn' + (danger ? ' btn-danger' : '') + '" data-v="1"></button><button class="btn btn-ghost" data-v="0">Cancel</button></div></div>';
+      wrap.querySelector('#modalMsg').textContent = message;
+      wrap.querySelector('[data-v="1"]').textContent = okLabel || 'OK';
+      function done(v) { wrap.remove(); document.removeEventListener('keydown', onKey); resolve(v); }
+      function onKey(e) { if (e.key === 'Escape') done(false); }
+      wrap.addEventListener('click', function (e) {
+        var b = e.target.closest('[data-v]');
+        if (b) done(b.dataset.v === '1'); else if (e.target === wrap) done(false);
+      });
+      document.addEventListener('keydown', onKey);
+      document.body.appendChild(wrap);
+      wrap.querySelector('[data-v="1"]').focus();
+    });
   }
 
   // ================================================================ Helpers
@@ -387,7 +475,9 @@
     app.innerHTML = h;
     var r = document.getElementById('restart');
     if (r) r.onclick = function () {
-      if (confirm('Throw away your saved answers and start again?')) { del(DRAFT_KEY + id); location.hash = '#/exam/' + id; }
+      ask('Throw away your saved answers and start again?', 'Start again', true).then(function (ok) {
+        if (ok) { del(DRAFT_KEY + id); go('#/exam/' + id); }
+      });
     };
   }
 
@@ -432,16 +522,18 @@
     paperEl.addEventListener('change', onEdit);
     progress();
 
-    function submit(timedOut) {
+    function finish(timedOut) {
       if (submitted) return;
-      if (!timedOut) {
-        var left = keys.length - progress();
-        var msg = left ? 'You have ' + left + ' unanswered item' + (left > 1 ? 's' : '') + '. Submit anyway?' : 'Submit your paper now?';
-        if (!confirm(msg)) return;
-      }
       submitted = true;
       stopTimer();
-      submitPaper(paper, draft, !!timedOut);
+      submitPaper(paper, draft, timedOut);
+    }
+    function submit(timedOut) {
+      if (submitted) return;
+      if (timedOut) return finish(true);
+      var left = keys.length - progress();
+      var msg = left ? 'You have ' + left + ' unanswered item' + (left > 1 ? 's' : '') + '. Submit anyway?' : 'Submit your paper now?';
+      ask(msg, 'Submit').then(function (ok) { if (ok) finish(false); });
     }
     document.getElementById('submitTop').onclick = function () { submit(false); };
     document.getElementById('submitBottom').onclick = function () { submit(false); };
@@ -469,7 +561,7 @@
     else attempt.score = totals(paper, attempt).total;
     saveAttempt(attempt);
     del(DRAFT_KEY + paper.id);
-    location.hash = needSelf ? '#/mark/' + attempt.id : '#/result/' + attempt.id;
+    go(needSelf ? '#/mark/' + attempt.id : '#/result/' + attempt.id);
   }
 
   // ---------------------------------------------------------------- Self-marking
@@ -526,7 +618,7 @@
       a.status = 'complete';
       a.score = totals(paper, a).total;
       saveAttempt(a);
-      location.hash = '#/result/' + a.id;
+      go('#/result/' + a.id);
     };
   }
 
@@ -649,7 +741,7 @@
     var a = getAttempt(id);
     if (!a) return viewNotFound();
     if (a.kind === 'composition') return viewCompositionDone(a);
-    if (a.status === 'self-marking') { location.hash = '#/mark/' + id; return; }
+    if (a.status === 'self-marking') { go('#/mark/' + id); return; }
     var paper = P3.papers[a.paperId];
     setTitle('Results');
     var pct = Math.round(100 * a.score / a.totalMarks);
@@ -711,7 +803,11 @@
 
     function submit(timedOut) {
       if (submitted) return;
-      if (!timedOut && !confirm('Hand in your composition now? You will not be able to change it after this.')) return;
+      if (timedOut) return handIn(true);
+      ask('Hand in your composition now? You will not be able to change it after this.', 'Hand in').then(function (ok) { if (ok) handIn(false); });
+    }
+    function handIn(timedOut) {
+      if (submitted) return;
       submitted = true;
       stopTimer();
       draft.text = story.value; draft.notes = notes.value;
@@ -724,7 +820,7 @@
       };
       saveAttempt(a);
       del(dk);
-      location.hash = '#/result/' + a.id;
+      go('#/result/' + a.id);
     }
     document.getElementById('submitTop').onclick = function () { submit(false); };
     document.getElementById('submitBottom').onclick = function () { submit(false); };
@@ -774,7 +870,9 @@
     setTitle('Parent dashboard');
     var s = store();
     var all = s.attempts.slice().sort(function (a, b) { return b.submittedAt < a.submittedAt ? -1 : 1; });
-    var h = '<section class="panel"><h1>👪 Parent dashboard</h1><p class="muted">All work is saved in this browser on this device. Use Export to back up or move it to another device.</p>';
+    var h = '<section class="panel"><h1>👪 Parent dashboard</h1><p class="muted">' + (cloud
+      ? 'Work is saved to your claude.ai account, so this dashboard shows the same results on any device where you open this page while signed in.'
+      : 'All work is saved in this browser on this device. Use Export to back up or move it to another device.') + '</p>';
 
     // Summary by subject
     h += '<div class="summary">';
@@ -815,23 +913,36 @@
       '<form id="pinSet" class="pin-form"><input id="newPin" type="password" inputmode="numeric" placeholder="' + (s.settings.pin ? 'New PIN (blank = remove)' : 'Set a PIN') + '"><button class="btn btn-small">Save PIN</button></form></div>' +
       '<div><h3>Back up</h3><p class="muted">Download all attempts and compositions as a file, or restore from one.</p>' +
       '<div class="btn-row"><button class="btn btn-small" id="exportBtn">Export data</button><label class="btn btn-small btn-ghost">Import data<input type="file" id="importFile" accept="application/json,.json" hidden></label></div></div>' +
-      '<div><h3>Start fresh</h3><p class="muted">Delete every attempt on this device.</p><button class="btn btn-small btn-danger" id="wipe">Delete all data</button></div></div></section>';
+      '<div><h3>Start fresh</h3><p class="muted">Delete every attempt and composition.</p><button class="btn btn-small btn-danger" id="wipe">Delete all data</button></div></div></section>';
     app.innerHTML = h;
 
     document.getElementById('pinSet').onsubmit = function (e) {
       e.preventDefault();
-      var st = store(), v = document.getElementById('newPin').value.trim();
-      st.settings.pin = v; saveStore(st); unlockParent();
+      var v = document.getElementById('newPin').value.trim();
+      var settings = {};
+      for (var k in cache.settings) settings[k] = cache.settings[k];
+      settings.pin = v;
+      saveSettings(settings);
+      unlockParent();
       toast(v ? 'PIN saved.' : 'PIN removed.');
       viewParent();
     };
     document.getElementById('exportBtn').onclick = function () {
-      var blob = new Blob([JSON.stringify(store(), null, 2)], { type: 'application/json' });
-      var link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = 'p3-practice-backup-' + new Date().toISOString().slice(0, 10) + '.json';
-      document.body.appendChild(link); link.click(); link.remove();
-      setTimeout(function () { URL.revokeObjectURL(link.href); }, 1000);
+      var data = JSON.stringify(store(), null, 2);
+      var name = 'p3-practice-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+      var viaViewer = window.claude && typeof window.claude.use === 'function' ? window.claude.use('downloads') : Promise.resolve(null);
+      viaViewer.then(function (downloads) {
+        if (downloads) {
+          return downloads.save({ filename: name, data: data }).then(function () { toast('Backup saved.'); }, function (e) {
+            if (!e || e.code !== 'declined') toast('The backup file could not be saved here.', 'warn');
+          });
+        }
+        var link = document.createElement('a');
+        link.href = URL.createObjectURL(new Blob([data], { type: 'application/json' }));
+        link.download = name;
+        document.body.appendChild(link); link.click(); link.remove();
+        setTimeout(function () { URL.revokeObjectURL(link.href); }, 1000);
+      });
     };
     document.getElementById('importFile').onchange = function (e) {
       var file = e.target.files[0];
@@ -839,20 +950,21 @@
       file.text().then(function (txt) {
         var data = JSON.parse(txt);
         if (!data || !Array.isArray(data.attempts)) throw new Error('bad file');
-        var st = store(), ids = {};
-        st.attempts.forEach(function (a) { ids[a.id] = true; });
+        var ids = {};
+        cache.attempts.forEach(function (a) { ids[a.id] = true; });
         var added = data.attempts.filter(function (a) { return a && a.id && !ids[a.id]; });
-        st.attempts = st.attempts.concat(added);
-        saveStore(st);
+        added.forEach(saveAttempt);
         toast('Imported ' + added.length + ' new item' + (added.length === 1 ? '' : 's') + '.');
         viewParent();
       }).catch(function () { toast('Sorry, that file could not be read.', 'warn'); });
     };
     document.getElementById('wipe').onclick = function () {
-      if (!confirm('Delete ALL attempts and compositions on this device? This cannot be undone. (Tip: export first.)')) return;
-      var st = store(); st.attempts = []; saveStore(st);
-      toast('All data deleted.');
-      viewParent();
+      ask('Delete ALL attempts and compositions? This cannot be undone. (Tip: export a backup first.)', 'Delete everything', true).then(function (ok) {
+        if (!ok) return;
+        deleteAllAttempts();
+        toast('All data deleted.');
+        viewParent();
+      });
     };
   }
 
@@ -934,9 +1046,19 @@
   }
 
   // ================================================================ Router
-  function route() {
+  // Navigation is kept in page state (the claude.ai viewer does not pass #/paths through),
+  // and mirrored to the address bar where the browser allows it.
+  var currentPath = location.hash.indexOf('#/') === 0 ? location.hash.slice(1) : '/';
+  function go(path) {
+    currentPath = path.replace(/^#/, '');
+    try { history.pushState(null, '', '#' + currentPath); } catch (e) { /* sandboxed */ }
+    route();
+  }
+
+  function route(keepScroll) {
     stopTimer();
-    var parts = location.hash.replace(/^#\/?/, '').split('/');
+    document.querySelectorAll('.modal-backdrop').forEach(function (m) { m.remove(); });
+    var parts = currentPath.replace(/^\/?/, '').split('/');
     var view = parts[0], id = decodeURIComponent(parts[1] || '');
     document.querySelectorAll('.topnav a').forEach(function (a) {
       a.classList.toggle('active', (view === 'parent' || view === 'attempt') ? a.getAttribute('href') === '#/parent' : a.getAttribute('href') === '#/');
@@ -956,9 +1078,19 @@
       case 'attempt': viewParentAttempt(id); break;
       default: viewNotFound();
     }
-    window.scrollTo(0, 0);
+    if (keepScroll !== true) window.scrollTo(0, 0);
   }
 
-  window.addEventListener('hashchange', route);
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('a[href^="#/"]');
+    if (!a || e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey) return;
+    e.preventDefault();
+    go(a.getAttribute('href'));
+  });
+  window.addEventListener('popstate', function () {
+    currentPath = location.hash.indexOf('#/') === 0 ? location.hash.slice(1) : '/';
+    route();
+  });
   route();
+  connectCloud();
 })();
