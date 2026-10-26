@@ -5,7 +5,8 @@
   var STORE_KEY = 'lianhuaP3.v1';
   var DRAFT_KEY = 'lianhuaP3.draft.';
   var UNLOCK_KEY = 'lianhuaP3.parentUnlocked';
-  var SUBJECT_ICONS = { maths: '➗', science: '🔬', english: '📖', composition: '✏️' };
+  var SUBJECT_ICONS = { maths: '➗', science: '🔬', english: '📖', chinese: '🖌️', composition: '✏️' };
+  var SUBJECTS = [['maths', 'Mathematics'], ['science', 'Science'], ['english', 'English'], ['chinese', '华文 Chinese']];
 
   // ================================================================ Storage
   // localStorage, with an in-memory fallback so the app still works in private mode.
@@ -147,6 +148,14 @@
       d.toLocaleTimeString('en-GB', { hour: 'numeric', minute: '2-digit', hour12: true });
   }
   function wordCount(t) { var m = String(t || '').trim().match(/\S+/g); return m ? m.length : 0; }
+  // Chinese writing is counted in characters (字); any English words in it count as one each.
+  function charCount(t) {
+    t = String(t || '');
+    var cjk = (t.match(/[\u3400-\u9fff]/g) || []).length;
+    return cjk + wordCount(t.replace(/[\u3000-\u303f\u3400-\u9fff\uff00-\uffef]/g, ' '));
+  }
+  function compCount(c, t) { return c.lang === 'zh' ? charCount(t) : wordCount(t); }
+  function countUnit(a) { return a.countUnit || 'words'; }
   function isBlank(v) { return v == null || String(v).trim() === ''; }
   function multiline(t) { return esc(t).replace(/\n/g, '<br>'); }
 
@@ -219,7 +228,7 @@
             });
             break;
           case 'open': q.parts.forEach(function (p) { add(q.id + '.' + p.id, p.marks, 'self', { part: p }); }); break;
-          case 'cloze': q.blanks.forEach(function (b) { add(q.id + '.' + b.n, 1, 'auto', { blank: b }); }); break;
+          case 'cloze': q.blanks.forEach(function (b) { add(q.id + '.' + b.n, q.marksEach || 1, 'auto', { blank: b }); }); break;
           case 'editing': q.items.forEach(function (b) { add(q.id + '.' + b.n, 1, 'auto', { blank: b }); }); break;
           case 'tf': q.items.forEach(function (it) { add(q.id + '.' + it.id, q.marks / q.items.length, 'auto', { item: it }); }); break;
         }
@@ -244,7 +253,7 @@
         if (stepCorrect(q, u.part, last, A)) return u.marks;
         return steps.reduce(function (t, s) { return t + (stepCorrect(q, u.part, s, A) ? s.marks : 0); }, 0);
       }
-      case 'cloze': return P3.norm.text(A[u.key]) === P3.norm.text(u.blank.answer) ? 1 : 0;
+      case 'cloze': return P3.norm.text(A[u.key]) === P3.norm.text(u.blank.answer) ? u.marks : 0;
       case 'editing': return P3.norm.compact(A[u.key]) === P3.norm.compact(u.blank.answer) ? 1 : 0;
       case 'tf': return A[u.key] === u.item.answer ? u.marks : 0;
     }
@@ -361,7 +370,7 @@
             opts.map(function (o) { return '<option value="' + esc(o.v) + '"' + (A[k] === o.v ? ' selected' : '') + '>' + esc(o.t) + '</option>'; }).join('') +
             '</select></span>';
         }) + '</div>';
-        return qWrap(q, h, q.blanks.length, true);
+        return qWrap(q, h, q.blanks.length * (q.marksEach || 1), true);
       }
       case 'editing': {
         h += '<div class="passage editing">' + editingHtml(q.passage) + '</div><div class="edit-grid">';
@@ -411,33 +420,43 @@
   // ================================================================ Views
   function setTitle(t) { document.title = t ? t + ' · P3 Practice' : 'P3 Practice Papers'; }
 
+  function paperCard(p, s) {
+    var mine = s.attempts.filter(function (a) { return a.paperId === p.id && a.status === 'complete'; });
+    var best = mine.reduce(function (b, a) { return Math.max(b, a.score); }, -1);
+    var draft = getJSON(DRAFT_KEY + p.id, null);
+    return '<article class="card card-' + p.subject + '"' + (p.lang === 'zh' ? ' lang="zh-Hans"' : '') + '><div class="card-icon">' + SUBJECT_ICONS[p.subject] + '</div>' +
+      '<h3>' + esc((p.title.split('·')[0] || p.title).trim()) + '</h3>' +
+      '<p class="card-title">' + esc((p.title.split('·')[1] || '').trim()) + '</p>' +
+      '<ul class="card-meta"><li>⏱ ' + fmtDuration(p.durationMin * 60) + '</li><li>📝 ' + p.totalMarks + ' marks</li></ul>' +
+      '<p class="card-format">' + p.sections.map(function (sec) { return esc(sec.title + (sec.subtitle ? ' – ' + sec.subtitle : '')); }).join('<br>') + '</p>' +
+      (best >= 0 ? '<p class="best">Best score: <strong>' + fmtMark(best) + ' / ' + p.totalMarks + '</strong></p>' : '') +
+      '<a class="btn" href="#/paper/' + p.id + '">' + (draft ? 'Continue paper ▶' : 'Start paper') + '</a></article>';
+  }
+
+  function compCard(c) {
+    var zh = c.lang === 'zh';
+    var draft = getJSON(DRAFT_KEY + c.id, null);
+    return '<article class="card card-composition"' + (zh ? ' lang="zh-Hans"' : '') + '><div class="card-icon">' + SUBJECT_ICONS.composition + '</div>' +
+      '<h3>' + (zh ? '华文 试卷一 · 作文' : 'English Paper 1 · Composition') + '</h3>' +
+      '<p class="card-title">' + (zh ? '看图作文：' : '') + esc(c.title) + '</p>' +
+      '<ul class="card-meta"><li>⏱ ' + c.durationMin + ' min</li><li>📝 ' + c.totalMarks + ' marks</li></ul>' +
+      '<p class="card-format">' + c.panels.length + ' pictures with helping words<br>Planning checklist<br>Your parent will mark this</p>' +
+      '<a class="btn" href="#/write/' + c.id + '">' + (draft ? 'Continue writing ▶' : 'Start writing') + '</a></article>';
+  }
+
   function viewHome() {
     setTitle('');
     var s = store();
     var h = '<section class="hero"><h1>Hello, P3 champion! 👋</h1><p>Practise for the <strong>End-of-Year Exam</strong> with papers in the Lianhua Primary School P3 format. Pick a paper, keep an eye on the timer and do your best!</p></section>';
-    h += '<div class="cards">';
-    P3.paperOrder.forEach(function (id) {
-      var p = P3.papers[id];
-      var mine = s.attempts.filter(function (a) { return a.paperId === id && a.status === 'complete'; });
-      var best = mine.reduce(function (b, a) { return Math.max(b, a.score); }, -1);
-      var draft = getJSON(DRAFT_KEY + id, null);
-      h += '<article class="card card-' + p.subject + '"><div class="card-icon">' + SUBJECT_ICONS[p.subject] + '</div><h2>' + esc(p.subjectName) + '</h2>' +
-        '<p class="card-title">' + esc(p.title.split('·')[1] || p.title) + '</p>' +
-        '<ul class="card-meta"><li>⏱ ' + fmtDuration(p.durationMin * 60) + '</li><li>📝 ' + p.totalMarks + ' marks</li></ul>' +
-        '<p class="card-format">' + p.sections.map(function (sec) { return esc(sec.title + (sec.subtitle ? ' – ' + sec.subtitle : '')); }).join('<br>') + '</p>' +
-        (best >= 0 ? '<p class="best">Best score: <strong>' + best + ' / ' + p.totalMarks + '</strong></p>' : '') +
-        '<a class="btn" href="#/paper/' + id + '">' + (draft ? 'Continue paper ▶' : 'Start paper') + '</a></article>';
+    SUBJECTS.forEach(function (pair) {
+      var papers = P3.paperOrder.filter(function (id) { return P3.papers[id].subject === pair[0]; });
+      var comps = P3.compositionOrder.filter(function (id) { return P3.compositions[id].subject === pair[0]; });
+      if (!papers.length && !comps.length) return;
+      h += '<h2 class="subject-h">' + SUBJECT_ICONS[pair[0]] + ' ' + esc(pair[1]) + '</h2><div class="cards">';
+      papers.forEach(function (id) { h += paperCard(P3.papers[id], s); });
+      comps.forEach(function (id) { h += compCard(P3.compositions[id]); });
+      h += '</div>';
     });
-    P3.compositionOrder.forEach(function (id) {
-      var c = P3.compositions[id];
-      var draft = getJSON(DRAFT_KEY + id, null);
-      h += '<article class="card card-composition"><div class="card-icon">' + SUBJECT_ICONS.composition + '</div><h2>English Paper 1</h2>' +
-        '<p class="card-title">Composition: ' + esc(c.title) + '</p>' +
-        '<ul class="card-meta"><li>⏱ ' + c.durationMin + ' min</li><li>📝 ' + c.totalMarks + ' marks</li></ul>' +
-        '<p class="card-format">3 pictures with helping words<br>Planning checklist<br>Your parent will mark this</p>' +
-        '<a class="btn" href="#/write/' + id + '">' + (draft ? 'Continue writing ▶' : 'Start writing') + '</a></article>';
-    });
-    h += '</div>';
     var recent = s.attempts.slice().sort(function (a, b) { return b.submittedAt < a.submittedAt ? -1 : 1; }).slice(0, 5);
     if (recent.length) {
       h += '<section class="panel"><h2>My recent work</h2><ul class="recent">' + recent.map(function (a) {
@@ -497,7 +516,7 @@
     var h = '<div class="exam-bar"><div class="exam-title">' + SUBJECT_ICONS[paper.subject] + ' ' + esc(paper.subjectName) + '</div>' +
       '<div class="exam-progress"><span id="prog"></span><div class="progress"><div id="progbar"></div></div></div>' +
       '<div class="timer" id="timer" aria-live="off" title="Time left"></div><button class="btn btn-small" id="submitTop">Submit</button></div>';
-    h += '<article class="paper"><header class="paper-head"><h1>' + esc(paper.title) + '</h1><p>Time: ' + fmtDuration(paper.durationMin * 60) +
+    h += '<article class="paper"' + (paper.lang === 'zh' ? ' lang="zh-Hans"' : '') + '><header class="paper-head"><h1>' + esc(paper.title) + '</h1><p>Time: ' + fmtDuration(paper.durationMin * 60) +
       ' · Total: ' + paper.totalMarks + ' marks</p></header>';
     paper.sections.forEach(function (s) { h += renderSection(s, draft.answers); });
     h += '<div class="end-paper"><p>— End of paper —</p><p>Check your work before you submit.</p><button class="btn btn-big" id="submitBottom">Submit paper</button></div></article>';
@@ -667,7 +686,7 @@
             p.steps.map(function (s) {
               var ok = stepCorrect(q, p, s, A);
               return '<tr><td>' + esc(s.label) + ' <span class="muted">(' + s.marks + ' m)</span></td><td>' + shown(A[k + '.' + s.id]) + '</td><td>' +
-                esc((s.prefix || '') + s.answers[0] + (s.unit ? ' ' + s.unit : '')) + '</td><td>' + (ok ? '✅' : '❌') + '</td></tr>';
+                esc((s.prefix || '') + (s.display || s.answers[0]) + (s.unit ? ' ' + s.unit : '')) + '</td><td>' + (ok ? '✅' : '❌') + '</td></tr>';
             }).join('') + '</tbody></table><div class="part-score">Part marks: ' + mk(M[k] || 0, pm) + '</div></div>';
         });
         h += '<div class="solution"><h4>Model working</h4>' + q.solution + '</div>';
@@ -704,7 +723,7 @@
         else h += '<div class="passage editing">' + editingHtml(q.passage) + '</div>';
         h += '<table class="rv"><thead><tr><th>No.</th><th>Your answer</th><th>Correct</th></tr></thead><tbody>' +
           list.map(function (b) {
-            var k = q.id + '.' + b.n; got += M[k] || 0; max += 1;
+            var k = q.id + '.' + b.n; got += M[k] || 0; max += q.type === 'cloze' ? (q.marksEach || 1) : 1;
             return '<tr class="' + (M[k] ? 'row-ok' : 'row-no') + '"><td>' + b.n + '</td><td>' + shown(A[k]) + '</td><td>' + esc(b.answer) + '</td></tr>';
           }).join('') + '</tbody></table>';
         break;
@@ -759,12 +778,21 @@
     var dk = DRAFT_KEY + id;
     var draft = getJSON(dk, null);
     var pictures = '<div class="panels">' + c.panels.join('') + '</div>';
-    var words = '<div class="helping"><h3>Helping words</h3><div class="hw-list">' + c.helpingWords.map(function (w) { return '<span>' + esc(w) + '</span>'; }).join('') + '</div></div>';
+    var zh = c.lang === 'zh';
+    var T = zh
+      ? { heading: '华文 试卷一 · 作文', helping: '提示词语 Helping words', checklist: '写作检查表 Planning checklist', notes: '写作大纲 Planning notes',
+          mine: '我的作文 My composition', unit: '字', unitLong: 'Characters (字)', notesHint: '时间？地点？人物？发生了什么事？心情怎样？',
+          storyHint: '在这里写你的作文。每一段的开头空两格。', keyboard: 'Use the Chinese (Pinyin) keyboard to type. ' }
+      : { heading: 'English Paper 1 · Composition', helping: 'Helping words', checklist: 'Planning checklist', notes: 'Planning notes',
+          mine: 'My composition', unit: 'words', unitLong: 'Words', notesHint: 'Who? Where? When? What happened? How did they feel?',
+          storyHint: 'Write your story here. Remember to leave a blank line between paragraphs.', keyboard: '' };
+    var words = '<div class="helping"><h3>' + T.helping + '</h3><div class="hw-list">' + c.helpingWords.map(function (w) { return '<span>' + esc(w) + '</span>'; }).join('') + '</div></div>';
 
     if (!draft) {
-      app.innerHTML = '<section class="panel intro"><p class="crumb"><a href="#/">← Home</a></p><h1>✏️ English Paper 1 · Composition</h1>' +
+      app.innerHTML = '<section class="panel intro"><p class="crumb"><a href="#/">← Home</a></p><h1>✏️ ' + T.heading + '</h1>' +
         '<h2 class="comp-title">' + esc(c.title) + '</h2><p>' + c.instruction + '</p>' + pictures + words +
-        '<div class="intro-facts"><div><b>' + c.durationMin + ' min</b><span>Time allowed</span></div><div><b>' + c.totalMarks + '</b><span>Marks (marked by your parent)</span></div><div><b>' + c.minWords + '+</b><span>Words</span></div></div>' +
+        '<div class="intro-facts"><div><b>' + c.durationMin + ' min</b><span>Time allowed</span></div><div><b>' + c.totalMarks + '</b><span>Marks (marked by your parent)</span></div><div><b>' + c.minWords + '+</b><span>' + T.unitLong + '</span></div></div>' +
+        (zh ? '<p>' + T.keyboard + 'On an iPad: Settings → General → Keyboard → Keyboards → Add New Keyboard → Chinese, Simplified → Pinyin.</p>' : '') +
         '<p>Spend about <strong>10 minutes planning</strong> with the checklist, <strong>35 minutes writing</strong> and <strong>5 minutes checking</strong>.</p>' +
         '<div class="btn-row"><button class="btn btn-big" id="go">Start the 50-minute timer ▶</button></div></section>';
       document.getElementById('go').onclick = function () {
@@ -777,22 +805,22 @@
     var submitted = false;
     var h = '<div class="exam-bar"><div class="exam-title">✏️ Composition</div><div class="exam-progress"><span id="wc"></span></div>' +
       '<div class="timer" id="timer"></div><button class="btn btn-small" id="submitTop">Hand in</button></div>';
-    h += '<div class="comp-layout"><aside class="comp-side"><h2 class="comp-title">' + esc(c.title) + '</h2><p>' + c.instruction + '</p>' + pictures + words +
-      '<div class="checklist"><h3>Planning checklist</h3>' + c.checklist.map(function (item, i) {
+    h += '<div class="comp-layout"' + (zh ? ' lang="zh-Hans"' : '') + '><aside class="comp-side"><h2 class="comp-title">' + esc(c.title) + '</h2><p>' + c.instruction + '</p>' + pictures + words +
+      '<div class="checklist"><h3>' + T.checklist + '</h3>' + c.checklist.map(function (item, i) {
         return '<label><input type="checkbox" data-check="' + i + '"' + (draft.checklist[i] ? ' checked' : '') + '> ' + esc(item) + '</label>';
       }).join('') + '</div>' +
-      '<label class="working-label" for="notes">Planning notes</label><textarea id="notes" class="ans-area" rows="6" placeholder="Who? Where? When? What happened? How did they feel?">' + esc(draft.notes) + '</textarea></aside>' +
-      '<section class="comp-main"><label class="working-label" for="story">My composition</label>' +
-      '<textarea id="story" class="story" spellcheck="false" placeholder="Write your story here. Remember to leave a blank line between paragraphs.">' + esc(draft.text) + '</textarea>' +
-      '<p class="muted">Spell-check is turned off, just like in the real exam. Your writing is saved automatically.</p>' +
+      '<label class="working-label" for="notes">' + T.notes + '</label><textarea id="notes" class="ans-area" rows="6" placeholder="' + esc(T.notesHint) + '">' + esc(draft.notes) + '</textarea></aside>' +
+      '<section class="comp-main"><label class="working-label" for="story">' + T.mine + '</label>' +
+      '<textarea id="story" class="story" spellcheck="false" placeholder="' + esc(T.storyHint) + '">' + esc(draft.text) + '</textarea>' +
+      '<p class="muted">' + T.keyboard + 'Spell-check is turned off, just like in the real exam. Your writing is saved automatically.</p>' +
       '<div class="btn-row"><button class="btn btn-big" id="submitBottom">Hand in my composition</button></div></section></div>';
     app.innerHTML = h;
 
     var story = document.getElementById('story'), notes = document.getElementById('notes');
     function save() { setJSON(dk, draft); }
     function wc() {
-      var n = wordCount(draft.text);
-      document.getElementById('wc').innerHTML = '<b>' + n + '</b> words' + (n < c.minWords ? ' <span class="muted">(aim for ' + c.minWords + '+)</span>' : ' ✅');
+      var n = compCount(c, draft.text);
+      document.getElementById('wc').innerHTML = '<b>' + n + '</b> ' + T.unit + (n < c.minWords ? ' <span class="muted">(aim for ' + c.minWords + '+)</span>' : ' ✅');
     }
     story.addEventListener('input', function () { draft.text = story.value; save(); wc(); });
     notes.addEventListener('input', function () { draft.notes = notes.value; save(); });
@@ -812,10 +840,10 @@
       stopTimer();
       draft.text = story.value; draft.notes = notes.value;
       var a = {
-        id: uid(), kind: 'composition', subject: 'english', promptId: id, title: 'Composition: ' + c.title,
+        id: uid(), kind: 'composition', subject: c.subject || 'english', promptId: id, title: (zh ? '作文：' : 'Composition: ') + c.title,
         startedAt: draft.startedAt, submittedAt: new Date().toISOString(),
         timeLimitSec: c.durationMin * 60, timeUsedSec: c.durationMin * 60 - draft.remaining, timedOut: timedOut,
-        text: draft.text, notes: draft.notes, checklist: draft.checklist, wordCount: wordCount(draft.text),
+        text: draft.text, notes: draft.notes, checklist: draft.checklist, wordCount: compCount(c, draft.text), countUnit: T.unit,
         totalMarks: c.totalMarks, status: 'awaiting-review', review: null
       };
       saveAttempt(a);
@@ -840,7 +868,7 @@
           '<table class="data-table sec-table"><tbody><tr><td>Content</td><td>' + esc(a.review.content) + ' / 10</td></tr><tr><td>Language</td><td>' + esc(a.review.language) + ' / 10</td></tr></tbody></table></div>' +
           (a.review.comment ? '<div class="parent-note"><h3>Note from your parent</h3><p>' + multiline(a.review.comment) + '</p></div>' : '')
         : '<p class="cheer">🎉 Well done! Your composition has been saved. Your parent will read it and give you marks and feedback.</p>') +
-      '<p class="muted">' + a.wordCount + ' words · Time used: ' + fmtDuration(a.timeUsedSec) + (a.timedOut ? ' (time ran out)' : '') + '</p>' + quote() +
+      '<p class="muted">' + a.wordCount + ' ' + countUnit(a) + ' · Time used: ' + fmtDuration(a.timeUsedSec) + (a.timedOut ? ' (time ran out)' : '') + '</p>' + quote() +
       '<div class="btn-row"><a class="btn btn-ghost" href="#/">Back to home</a></div></section>' +
       '<article class="panel"><h2>My composition</h2><div class="story-view">' + multiline(a.text) + '</div></article>';
   }
@@ -876,12 +904,12 @@
 
     // Summary by subject
     h += '<div class="summary">';
-    [['maths', 'Mathematics'], ['science', 'Science'], ['english', 'English Paper 2']].forEach(function (pair) {
+    SUBJECTS.forEach(function (pair) {
       var list = all.filter(function (a) { return a.kind === 'paper' && a.subject === pair[0] && a.status === 'complete'; });
       var best = list.reduce(function (b, a) { return Math.max(b, a.score); }, 0);
       var avg = list.length ? list.reduce(function (t, a) { return t + a.score; }, 0) / list.length : 0;
-      h += '<div class="sum-card card-' + pair[0] + '"><h3>' + SUBJECT_ICONS[pair[0]] + ' ' + pair[1] + '</h3>' +
-        (list.length ? '<p><b>' + list.length + '</b> attempt' + (list.length > 1 ? 's' : '') + '</p><p>Latest: <b>' + fmtMark(list[0].score) + '</b> / 50</p><p>Best: <b>' + fmtMark(best) + '</b> · Average: <b>' + fmtMark(avg) + '</b></p>' +
+      h += '<div class="sum-card card-' + pair[0] + '"><h3>' + SUBJECT_ICONS[pair[0]] + ' ' + esc(pair[1]) + (pair[0] === 'english' || pair[0] === 'chinese' ? ' Paper 2' : '') + '</h3>' +
+        (list.length ? '<p><b>' + list.length + '</b> attempt' + (list.length > 1 ? 's' : '') + '</p><p>Latest: <b>' + fmtMark(list[0].score) + '</b> / ' + list[0].totalMarks + '</p><p>Best: <b>' + fmtMark(best) + '</b> · Average: <b>' + fmtMark(avg) + '</b></p>' +
           '<div class="trend">' + list.slice(0, 8).reverse().map(function (a) { return '<span style="height:' + Math.max(6, 100 * a.score / a.totalMarks) + '%" title="' + fmtMark(a.score) + ' / ' + a.totalMarks + '"></span>'; }).join('') + '</div>'
           : '<p class="muted">No attempts yet.</p>') + '</div>';
     });
@@ -891,7 +919,7 @@
 
     if (pending.length) {
       h += '<section class="panel attention"><h2>📬 Compositions to review</h2><ul class="recent">' + pending.map(function (a) {
-        return '<li><a href="#/attempt/' + a.id + '"><span>' + esc(a.title) + '</span><span class="muted">' + fmtDate(a.submittedAt) + '</span><span>' + a.wordCount + ' words · <strong>Review ▶</strong></span></a></li>';
+        return '<li><a href="#/attempt/' + a.id + '"><span>' + esc(a.title) + '</span><span class="muted">' + fmtDate(a.submittedAt) + '</span><span>' + a.wordCount + ' ' + countUnit(a) + ' · <strong>Review ▶</strong></span></a></li>';
       }).join('') + '</ul></section>';
     }
 
@@ -981,7 +1009,7 @@
       var ticked = c.checklist.map(function (item, i) { return '<li class="' + (a.checklist && a.checklist[i] ? 'done' : 'notdone') + '">' + esc(item) + '</li>'; }).join('');
       var used = c.helpingWords.filter(function (w) { return a.text.toLowerCase().indexOf(w.toLowerCase()) >= 0; });
       app.innerHTML = '<section class="panel">' + back + '<h1>✏️ ' + esc(a.title) + '</h1>' +
-        '<p class="muted">Submitted ' + fmtDate(a.submittedAt) + ' · ' + a.wordCount + ' words · Time used ' + fmtDuration(a.timeUsedSec) + (a.timedOut ? ' (ran out of time)' : '') + '</p>' +
+        '<p class="muted">Submitted ' + fmtDate(a.submittedAt) + ' · ' + a.wordCount + ' ' + countUnit(a) + ' · Time used ' + fmtDuration(a.timeUsedSec) + (a.timedOut ? ' (ran out of time)' : '') + '</p>' +
         '<details><summary>Show the pictures and helping words</summary><div class="panels">' + c.panels.join('') + '</div><p>Helping words: ' + c.helpingWords.map(esc).join(', ') + '</p></details>' +
         '<div class="comp-review"><div><h2>Composition</h2><div class="story-view">' + shown(a.text) + '</div></div>' +
         '<aside><h3>Planning notes</h3><div class="your-ans">' + shown(a.notes) + '</div><h3>Checklist</h3><ul class="checklist-review">' + ticked + '</ul>' +

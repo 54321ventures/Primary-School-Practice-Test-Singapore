@@ -60,6 +60,15 @@ window.P3 = window.P3 || { papers: {}, paperOrder: [], compositions: {}, composi
         var f = P3.norm.compact(input);
         return answers.some(function (a) { return P3.norm.compact(a) === f; });
       }
+      case 'duration': {
+        // "2 h 25 min", "2h25min", "2 hours 25 minutes" or "145 min"; answers are given in minutes
+        var t = String(input).toLowerCase().replace(/\s+/g, '');
+        if (/^\d+$/.test(t)) return answers.some(function (a) { return +a === +t; });
+        var m = t.match(/^(?:(\d+)h(?:ours?|rs?)?)?(?:(\d+)m(?:ins?|inutes?)?)?$/);
+        if (!m || (m[1] == null && m[2] == null)) return false;
+        var mins = (+(m[1] || 0)) * 60 + (+(m[2] || 0));
+        return answers.some(function (a) { return +a === mins; });
+      }
       case 'line': {
         // A line can be named either way round: CD = DC
         var letters = String(input).toUpperCase().replace(/LINE/g, '').replace(/[^A-Z]/g, '');

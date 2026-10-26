@@ -8,10 +8,17 @@ no build step, no server and no account. Open `index.html` and start.
 
 | Paper | Time | Marks | Format | Marking |
 |---|---|---|---|---|
-| **Mathematics** | 1 h 20 min | 50 | A: 12 MCQ (2 m each) · B: 12 short-answer (1 m) · C: 4 structured (3–4 m) | Automatic. Section C gives marks for each correct step, and a correct final answer earns the whole part |
-| **Science** | 1 h | 50 | A: 15 MCQ (2 m) · B: 6 structured questions (20 m) | MCQ automatic. Section B is self-marked against model answers with **highlighted keywords** |
-| **English Paper 2** | 1 h 15 min | 50 | Grammar MCQ (10) · Vocabulary MCQ (5) · Grammar cloze (10) · Editing for spelling (6) · Synthesis & transformation (8) · Comprehension (11) | Automatic, except comprehension and any synthesis answer that doesn't match a model answer, which are self-marked |
-| **English Paper 1: Composition** | 50 min | 20 | 3-picture prompt, helping words, planning checklist, planning notes | **Not auto-marked.** Saved for the parent to mark (Content /10, Language /10, plus comments) |
+| **Mathematics** (Practice Papers 1 & 2) | 1 h 20 min | 50 | A: 12 MCQ (2 m each) · B: 12 short-answer (1 m) · C: 4 structured (3–4 m) | Automatic. Section C gives marks for each correct step, and a correct final answer earns the whole part |
+| **Science** (Practice Paper 1) | 1 h | 50 | A: 15 MCQ (2 m) · B: 6 structured questions (20 m) | MCQ automatic. Section B is self-marked against model answers with **highlighted keywords** |
+| **English Paper 2** (Practice Papers 1 & 2) | 1 h 15 min | 50 | Grammar MCQ (10) · Vocabulary MCQ (5) · Grammar cloze (10) · Editing for spelling (6) · Synthesis & transformation (8) · Comprehension (11) | Automatic, except comprehension and any synthesis answer that doesn't match a model answer, which are self-marked |
+| **English Paper 1: Composition** (3 prompts) | 50 min | 20 | 3-picture prompt, helping words, planning checklist, planning notes | **Not auto-marked.** Saved for the parent to mark (Content /10, Language /10, plus comments) |
+| **华文 Chinese Paper 2** (Practice Paper 1) | 1 h | 50 | 语文应用 MCQ (10 × 2 m) · 短文填空 (5 × 2 m) · 完成对话 (3 × 2 m) · 阅读理解一 MCQ (3 × 2 m) · 阅读理解二 open-ended (4 × 2 m) | MCQ and cloze automatic. 阅读理解二 is self-marked against model answers with keywords |
+| **华文 Chinese Paper 1: 看图作文** (1 prompt) | 50 min | 20 | 4 pictures, 提示词语, 写作检查表, planning notes; counted in characters (字), 150+ | **Not auto-marked.** Saved for the parent to mark |
+
+The brief gave no Chinese format, so the Chinese papers follow a typical
+Singapore P3 school paper. If Lianhua's own paper differs, change the
+`chinese` entry in `tools/validate.js` and the paper file to match. The Chinese
+oral and listening components aren't included.
 
 Topics follow Primary Mathematics 3A/3B and the P3 Science syllabus: numbers to
 10 000, the four operations, money, the 6/7/8/9 times tables, bar models, bar
@@ -69,11 +76,11 @@ Add a `<script>` tag for it in `index.html`. Question types:
 | Type | Use | Key fields |
 |---|---|---|
 | `mcq` | Any multiple-choice question | `options` (4), `answer` (0-based index), `marks` |
-| `short` | Typed answer | `answers` (accepted list), `check`: `number` · `text` · `fraction` · `line`, optional `unit` / `prefix` |
+| `short` | Typed answer | `answers` (accepted list), `check`: `number` · `text` · `fraction` · `line` · `duration` (answer in minutes), optional `unit` / `prefix` |
 | `steps` | Maths structured question | `parts[].steps[]`, each with `label`, `answers`, `marks`; plus `solution` |
 | `open` | Self-marked written answer | `parts[]`, each with `prompt`, `marks`, and `model` (wrap keywords in `<mark>`), optional `tip` |
 | `rewrite` | Synthesis/transformation | `answers` (auto-accepted), `model`, `instruction` |
-| `cloze` | Grammar cloze with word box | `wordBank`, `passage` with `{16}` blanks, `blanks[]` |
+| `cloze` | Grammar cloze with word box | `wordBank`, `passage` with `{16}` blanks, `blanks[]`, optional `marksEach` (default 1) |
 | `editing` | Spelling editing | `passage` with `[26:feild]` tokens, `items[]` |
 | `tf` | True/False table | `items[]` with `answer: 'T' \| 'F'` |
 

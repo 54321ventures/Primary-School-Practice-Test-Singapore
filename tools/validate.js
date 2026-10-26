@@ -19,7 +19,9 @@ const P3 = ctx.window.P3;
 const FORMATS = {
   maths: { duration: 80, total: 50, sections: [['A', 'mcq', 12], ['B', 'short', 12], ['C', 'steps', 4]] },
   science: { duration: 60, total: 50, sections: [['A', 'mcq', 15], ['B', 'open', 6]] },
-  english: { duration: 75, total: 50, sections: [['A', 'mcq'], ['B', 'mcq'], ['C', 'cloze'], ['D', 'editing'], ['E', 'rewrite'], ['F']] }
+  english: { duration: 75, total: 50, sections: [['A', 'mcq'], ['B', 'mcq'], ['C', 'cloze'], ['D', 'editing'], ['E', 'rewrite'], ['F']] },
+  // Chinese Paper 2 has no format in the brief; this follows a typical Singapore P3 school paper.
+  chinese: { duration: 60, total: 50, sections: [['A', 'mcq', 10], ['B', 'cloze', 1], ['C', 'mcq', 3], ['D', 'mcq', 3], ['E', 'open', 4]] }
 };
 
 let errors = 0;
@@ -30,7 +32,7 @@ function questionMarks(q) {
     case 'mcq': case 'short': case 'rewrite': case 'tf': return q.marks;
     case 'steps': return q.parts.reduce((t, p) => t + p.steps.reduce((u, s) => u + s.marks, 0), 0);
     case 'open': return q.parts.reduce((t, p) => t + p.marks, 0);
-    case 'cloze': return q.blanks.length;
+    case 'cloze': return q.blanks.length * (q.marksEach || 1);
     case 'editing': return q.items.length;
     default: return NaN;
   }
@@ -85,7 +87,8 @@ for (const id of P3.compositionOrder) {
   console.log(id);
   if (c.durationMin !== 50) fail('composition should be 50 minutes');
   if (c.totalMarks !== 20) fail('composition should be 20 marks');
-  if (c.panels.length !== 3) fail('composition should have 3 pictures');
+  if (c.panels.length < 3 || c.panels.length > 4) fail('composition should have 3 or 4 pictures');
+  if (!FORMATS[c.subject]) fail('composition needs a subject (english or chinese)');
   if (!c.helpingWords.length || !c.checklist.length) fail('composition needs helping words and a checklist');
   console.log(`  ${c.panels.length} pictures, ${c.helpingWords.length} helping words ✓`);
 }
@@ -96,7 +99,9 @@ const checks = [
   ['number', '505 cents', ['505'], true], ['number', '3,045', ['3045'], true], ['number', '30m', ['30'], true],
   ['number', 'abc', ['1'], false], ['number', '', ['0'], false], ['fraction', ' 5 / 8 ', ['5/8'], true],
   ['line', 'DC', ['CD'], true], ['line', 'line cd', ['CD'], true], ['line', 'AD', ['CD'], false],
-  ['text', 'Six thousand and forty.', ['six thousand and forty'], true]
+  ['text', 'Six thousand and forty.', ['six thousand and forty'], true],
+  ['duration', '2 h 25 min', ['145'], true], ['duration', '2h25min', ['145'], true], ['duration', '2 hours 25 minutes', ['145'], true],
+  ['duration', '145 min', ['145'], true], ['duration', '2 h 15 min', ['145'], false], ['duration', 'two hours', ['145'], false]
 ];
 for (const [type, input, answers, expected] of checks) {
   if (P3.checkShort(type, input, answers) !== expected) fail(`checkShort(${type}, ${JSON.stringify(input)}) should be ${expected}`);
